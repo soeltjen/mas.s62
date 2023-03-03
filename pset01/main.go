@@ -21,6 +21,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -63,7 +64,6 @@ func main() {
 
 	fmt.Printf("forged msg: %s sig: %s\n", msgString, sig.ToHex())
 
-	return
 }
 
 // Signature systems have 3 functions: GenerateKey(), Sign(), and Verify().
@@ -74,6 +74,15 @@ func main() {
 // A block of data is always 32 bytes long; we're using sha256 and this
 // is the size of both the output (defined by the hash function) and our inputs
 type Block [32]byte
+
+func Generate256BitNumber() Block {
+	var num Block
+	_, err := rand.Read(num[:])
+	if err != nil {
+		panic(err)
+	}
+	return num
+}
 
 type SecretKey struct {
 	ZeroPre [256]Block
@@ -88,13 +97,13 @@ type PublicKey struct {
 // --- Methods on PublicKey type
 
 // ToHex gives a hex string for a PublicKey. no newline at the end
-func (self PublicKey) ToHex() string {
+func (publicKey PublicKey) ToHex() string {
 	// format is zerohash 0...255, onehash 0...255
 	var s string
-	for _, zero := range self.ZeroHash {
+	for _, zero := range publicKey.ZeroHash {
 		s += zero.ToHex()
 	}
-	for _, one := range self.OneHash {
+	for _, one := range publicKey.OneHash {
 		s += one.ToHex()
 	}
 	return s
@@ -110,7 +119,7 @@ func HexToPubkey(s string) (PublicKey, error) {
 	// first, make sure hex string is of correct length
 	if len(s) != expectedLength {
 		return p, fmt.Errorf(
-			"Pubkey string %d characters, expect %d", expectedLength)
+			"pubkey string %d characters, expect %d", len(s), expectedLength)
 	}
 
 	// decode from hex to a byte slice
@@ -121,10 +130,10 @@ func HexToPubkey(s string) (PublicKey, error) {
 	// we already checked the length of the hex string so don't need to re-check
 	buf := bytes.NewBuffer(bts)
 
-	for i, _ := range p.ZeroHash {
+	for i := range p.ZeroHash {
 		p.ZeroHash[i] = BlockFromByteSlice(buf.Next(32))
 	}
-	for i, _ := range p.OneHash {
+	for i := range p.OneHash {
 		p.OneHash[i] = BlockFromByteSlice(buf.Next(32))
 	}
 
@@ -137,20 +146,20 @@ type Message Block
 // --- Methods on the Block type
 
 // ToHex returns a hex encoded string of the block data, with no newlines.
-func (self Block) ToHex() string {
-	return fmt.Sprintf("%064x", self[:])
+func (block Block) ToHex() string {
+	return fmt.Sprintf("%064x", block[:])
 }
 
 // Hash returns the sha256 hash of the block.
-func (self Block) Hash() Block {
-	return sha256.Sum256(self[:])
+func (block Block) Hash() Block {
+	return sha256.Sum256(block[:])
 }
 
 // IsPreimage returns true if the block is a preimage of the argument.
 // For example, if Y = hash(X), then X.IsPreimage(Y) will return true,
 // and Y.IsPreimage(X) will return false.
-func (self Block) IsPreimage(arg Block) bool {
-	return self.Hash() == arg
+func (block Block) IsPreimage(arg Block) bool {
+	return block.Hash() == arg
 }
 
 // BlockFromByteSlice returns a block from a variable length byte slice.
@@ -169,9 +178,9 @@ type Signature struct {
 }
 
 // ToHex returns a hex string of a signature
-func (self Signature) ToHex() string {
+func (sig Signature) ToHex() string {
 	var s string
-	for _, b := range self.Preimage {
+	for _, b := range sig.Preimage {
 		s += b.ToHex()
 	}
 
@@ -188,7 +197,7 @@ func HexToSignature(s string) (Signature, error) {
 	// first, make sure hex string is of correct length
 	if len(s) != expectedLength {
 		return sig, fmt.Errorf(
-			"Pubkey string %d characters, expect %d", expectedLength)
+			"pubkey string %d characters, expect %d", len(s), expectedLength)
 	}
 
 	// decode from hex to a byte slice
@@ -199,7 +208,7 @@ func HexToSignature(s string) (Signature, error) {
 	// we already checked the length of the hex string so don't need to re-check
 	buf := bytes.NewBuffer(bts)
 
-	for i, _ := range sig.Preimage {
+	for i := range sig.Preimage {
 		sig.Preimage[i] = BlockFromByteSlice(buf.Next(32))
 	}
 	return sig, nil
@@ -220,32 +229,83 @@ func GenerateKey() (SecretKey, PublicKey, error) {
 	var sec SecretKey
 	var pub PublicKey
 
-	// Your code here
-	// ===
-
-	// ===
+	for x := 0; x < 256; x++ {
+		sec.ZeroPre[x] = Generate256BitNumber()
+		sec.OnePre[x] = Generate256BitNumber()
+		pub.ZeroHash[x] = sha256.Sum256(sec.ZeroPre[x][:])
+		pub.OneHash[x] = sha256.Sum256(sec.OnePre[x][:])
+	}
 	return sec, pub, nil
 }
 
 // Sign takes a message and secret key, and returns a signature.
 func Sign(msg Message, sec SecretKey) Signature {
 	var sig Signature
+	hash := sha256.Sum256(msg[:])
+	// fmt.Println("If bit in hash is 0, the bit in signature comes from pK1.")
+	// fmt.Printf("First element of Hash: %08b\n", hash[0])
+	var b byte
 
-	// Your code here
-	// ===
+	// for each byte....
+	k := 0
+	for i := 0; i < 32; i++ {
+		b = hash[i]
+		for j := 0; j < 8; j++ {
 
-	// ===
+			//starting from MSB
+			//if value is 1, choose privatekey index 1. if value is 0, choose privatekey index 0
+			if b&(1<<(7-j)) != 0 {
+				sig.Preimage[k] = sec.OnePre[k]
+			} else {
+				sig.Preimage[k] = sec.ZeroPre[k]
+			}
+			k++
+		}
+	}
+
 	return sig
 }
 
 // Verify takes a message, public key and signature, and returns a boolean
 // describing the validity of the signature.
 func Verify(msg Message, pub PublicKey, sig Signature) bool {
+	hash := sha256.Sum256(msg[:])
+	var verify [256]Block
+	var verifyHash [256]Block
+	var b byte
+	var isVerified bool
 
-	// Your code here
-	// ===
+	k := 0
+	for i := 0; i < 32; i++ {
+		b = hash[i]
+		for j := 0; j < 8; j++ {
 
-	// ===
+			//starting from MSB
+			//if value is 1, choose privatekey index 1. if value is 0, choose privatekey index 0
+			if b&(1<<(7-j)) != 0 {
+				for n := 0; n < 32; n++ {
+					verify[k][n] = pub.OneHash[k][n]
+				}
+			} else {
+				for n := 0; n < 32; n++ {
+					verify[k][n] = pub.ZeroHash[k][n]
 
-	return true
+				}
+			}
+			// Hash each number in signature giving 256 hashes
+			verifyHash[k] = sha256.Sum256(sig.Preimage[k][:])
+			if verifyHash[k] == verify[k] {
+				isVerified = true
+				// fmt.Printf("%v %v ", verifyHash[k], verify[k])
+			} else {
+				isVerified = false
+				// fmt.Printf("Verification Failed on hash %v", k)
+				// fmt.Printf("%v %v ", verifyHash[k], verify[k])
+				return isVerified
+			}
+			k++
+		}
+	}
+
+	return isVerified
 }
